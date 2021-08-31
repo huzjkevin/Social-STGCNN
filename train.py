@@ -4,6 +4,10 @@ import os
 
 import math
 import sys
+import datetime
+import random
+import yaml
+from torch.utils.tensorboard import SummaryWriter
 
 import torch
 import torch.nn as nn
@@ -40,8 +44,8 @@ parser.add_argument('--kernel_size', type=int, default=3)
 #Data specifc paremeters
 parser.add_argument('--obs_seq_len', type=int, default=8)
 parser.add_argument('--pred_seq_len', type=int, default=12)
-parser.add_argument('--dataset', default='eth',
-                    help='eth,hotel,univ,zara1,zara2')    
+parser.add_argument('--dataset', default='trajectory_combined',
+                    help='eth,hotel,univ,zara1,zara2,trajectory_combined')    
 
 #Training specifc parameters
 parser.add_argument('--batch_size', type=int, default=128,
@@ -58,18 +62,43 @@ parser.add_argument('--use_lrschd', action="store_true", default=False,
                     help='Use lr rate scheduler')
 parser.add_argument('--tag', default='tag',
                     help='personal tag for the model ')
+
+parser.add_argument("--log_dir", default="./", help="Directory containing logging file") 
                     
 args = parser.parse_args()
 
 
 
+curr_time = datetime.datetime.now()
+output_dir = f"exp_{args.dataset}_{curr_time.strftime('%Y%m%d%H%M%S')}"
+os.makedirs(output_dir, exist_ok=True)
+
+checkpoint_dir = os.path.join(output_dir, f"checkpoint_{args.dataset}")
+if os.path.exists(checkpoint_dir) is False:
+    os.mkdir(checkpoint_dir)
+
+# keep track of console outputs and experiment settings
+set_logger(
+    os.path.join(output_dir, args.log_dir, f"train_{args.dataset}.log")
+)
+config_file = open(
+    os.path.join(output_dir, f"config_{args.dataset}.yaml"), "w"
+)
+yaml.dump(args, config_file)
+tensorboard_dir = os.path.join(output_dir, "tensorboard")
+writer = SummaryWriter(tensorboard_dir)
+
+random.seed(72)
+np.random.seed(72)
+torch.manual_seed(72)
+torch.backends.cudnn.deterministic = True
+torch.backends.cudnn.benchmark = False
 
 
 
-
-print('*'*30)
-print("Training initiating....")
-print(args)
+logging.info('*'*30)
+logging.info("Training initiating....")
+logging.info(args)
 
 
 def graph_loss(V_pred,V_target):
@@ -122,18 +151,18 @@ if args.use_lrschd:
     
 
 
-checkpoint_dir = './checkpoint/'+args.tag+'/'
+# checkpoint_dir = './checkpoint/'+args.tag+'/'
 
-if not os.path.exists(checkpoint_dir):
-    os.makedirs(checkpoint_dir)
+# if not os.path.exists(checkpoint_dir):
+#     os.makedirs(checkpoint_dir)
     
 with open(checkpoint_dir+'args.pkl', 'wb') as fp:
     pickle.dump(args, fp)
     
 
 
-print('Data and model loaded')
-print('Checkpoint dir:', checkpoint_dir)
+logging.info('Data and model loaded')
+logging.info(f"Checkpoint dir: {checkpoint_dir}")
 
 #Training 
 metrics = {'train_loss':[],  'val_loss':[]}
@@ -195,7 +224,7 @@ def train(epoch):
             optimizer.step()
             #Metrics
             loss_batch += loss.item()
-            print('TRAIN:','\t Epoch:', epoch,'\t Loss:',loss_batch/batch_count)
+            logging.info(f'TRAIN: Epoch: {epoch}, Loss: {loss_batch/batch_count}')
             
     metrics['train_loss'].append(loss_batch/batch_count)
     
@@ -243,7 +272,7 @@ def vald(epoch):
             is_fst_loss = True
             #Metrics
             loss_batch += loss.item()
-            print('VALD:','\t Epoch:', epoch,'\t Loss:',loss_batch/batch_count)
+            logging.info(f"VALD: Epoch: {epoch} Loss: {loss_batch/batch_count}")
 
     metrics['val_loss'].append(loss_batch/batch_count)
     
@@ -253,7 +282,7 @@ def vald(epoch):
         torch.save(model.state_dict(),checkpoint_dir+'val_best.pth')  # OK
 
 
-print('Training started ...')
+logging.info('Training started ...')
 for epoch in range(args.num_epochs):
     train(epoch)
     vald(epoch)
@@ -261,15 +290,16 @@ for epoch in range(args.num_epochs):
         scheduler.step()
 
 
-    print('*'*30)
-    print('Epoch:',args.tag,":", epoch)
+    logging.info('*'*30)
+    logging.info(f"Epoch: {args.tag}: {epoch}")
     for k,v in metrics.items():
         if len(v)>0:
-            print(k,v[-1])
+            logging.info(f"{k}: {v[-1]}")
+            writer.add_scalar(k, v[-1], epoch)
 
 
-    print(constant_metrics)
-    print('*'*30)
+    logging.info(constant_metrics)
+    logging.info('*'*30)
     
     with open(checkpoint_dir+'metrics.pkl', 'wb') as fp:
         pickle.dump(metrics, fp)
